@@ -1,0 +1,33 @@
+name = "dawka"
+main = "worker/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Frontend (Vite build) served as static assets, fallthrough to worker for /api/*
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# D1 database
+[[d1_databases]]
+binding = "DB"
+database_name = "dawka"
+database_id = "REPLACE_WITH_D1_ID_AFTER_CREATE"
+migrations_dir = "migrations"
+
+# Cron: every 15 minutes. UTC. Worker decides per-household whether to act based on tz.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Production vars (non-secret). Secrets via `wrangler secret put`.
+[vars]
+APP_URL = "https://dawka.org"
+EMAIL_FROM = "Dawka <noreply@dawka.org>"
+VAPID_SUBJECT = "mailto:grzegorz@meger.io"
+
+# Required secrets (set via `wrangler secret put NAME`):
+# - VAPID_PUBLIC_KEY
+# - VAPID_PRIVATE_KEY
+# - RESEND_API_KEY
+# - SESSION_SECRET   (32+ random bytes for HMAC)
