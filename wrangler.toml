@@ -3,17 +3,25 @@ main = "worker/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Frontend (Vite build) served as static assets, fallthrough to worker for /api/*
+routes = [
+  { pattern = "dawka.org", custom_domain = true },
+  { pattern = "www.dawka.org", custom_domain = true }
+]
+
+# Frontend (Vite build) served as static assets. Worker runs first for /api/* and
+# /auth/* paths so that navigation requests (Sec-Fetch-Dest: document) hit our
+# routes instead of being short-circuited to index.html by SPA fallback.
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
 
 # D1 database
 [[d1_databases]]
 binding = "DB"
 database_name = "dawka"
-database_id = "REPLACE_WITH_D1_ID_AFTER_CREATE"
+database_id = "f56e5c71-0ddc-4f6f-a8d3-f4a5f18d4c36"
 migrations_dir = "migrations"
 
 # Cron: every 15 minutes. UTC. Worker decides per-household whether to act based on tz.

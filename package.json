@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/src/tsconfig.sw.json",
     "db:migrate:local": "wrangler d1 migrations apply dawka --local",
     "db:migrate:remote": "wrangler d1 migrations apply dawka --remote",
-    "vapid:generate": "node -e \"import('webpush-webcrypto').then(async m => { const k = await m.ApplicationServerKeys.generate(); console.log(JSON.stringify(await k.toJSON(), null, 2)); })\""
+    "vapid:generate": "node -e \"(async () => { const m = await import('webpush-webcrypto'); const c = await import('node:crypto'); m.setWebCrypto(c.webcrypto); const k = await m.ApplicationServerKeys.generate(); console.log(JSON.stringify(await k.toJSON(), null, 2)); })()\""
   },
   "dependencies": {
     "hono": "^4.6.0",
@@ -31,6 +31,6 @@
     "typescript": "^5.6.0",
     "vite": "^5.4.0",
     "vitest": "^2.1.0",
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.85.0"
   }
 }
