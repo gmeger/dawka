@@ -93,14 +93,17 @@ async function maybeEmail(
   if (nowMs - dose.first_push_at < EMAIL_AFTER_MS) return;
 
   const users = await listHouseholdUsers(env, household.id);
-  const tpl = reminderEmail();
 
   await Promise.all(
-    users.map((u) =>
-      sendEmail(env, { to: u.email, subject: tpl.subject, html: tpl.html, text: tpl.text }).catch(
-        (err) => console.error("reminder email failed", { user: u.email, err }),
-      ),
-    ),
+    users.map((u) => {
+      const tpl = reminderEmail(u.lang);
+      return sendEmail(env, {
+        to: u.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+      }).catch((err) => console.error("reminder email failed", { user: u.email, err }));
+    }),
   );
 
   await env.DB.prepare("UPDATE doses SET email_sent_at = ? WHERE id = ?")

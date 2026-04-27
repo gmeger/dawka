@@ -9,11 +9,14 @@ export type Household = {
   created_at: number;
 };
 
+export type Lang = "pl" | "en";
+
 export type User = {
   id: string;
   household_id: string;
   email: string;
   name: string | null;
+  lang: Lang;
   created_at: number;
 };
 

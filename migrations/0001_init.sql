@@ -14,6 +14,7 @@ CREATE TABLE users (
   household_id  TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
   email         TEXT NOT NULL UNIQUE,
   name          TEXT,
+  lang          TEXT NOT NULL DEFAULT 'pl',  -- 'pl' | 'en' — used for email content
   created_at    INTEGER NOT NULL
 );
 

@@ -4,6 +4,7 @@ import {
   deletePushSubscriptionByEndpoint,
   getHousehold,
   getUserByEmail,
+  type Lang,
   listHouseholdUsers,
   markDoseTaken,
   newId,
@@ -23,20 +24,24 @@ const app = new Hono<{ Bindings: Env }>();
 
 const MAGIC_LINK_TTL_MS = 30 * 60 * 1000;
 
+function pickLang(input: unknown, fallback: Lang = "pl"): Lang {
+  return input === "pl" || input === "en" ? input : fallback;
+}
+
 // --- Auth: request magic link --------------------------------------------------
 app.post("/api/auth/request", async (c) => {
-  const { email } = await c.req.json<{ email: string }>();
+  const { email, lang } = await c.req.json<{ email: string; lang?: Lang }>();
   if (!email || !email.includes("@")) return c.json({ error: "bad_email" }, 400);
 
   const normalized = email.toLowerCase().trim();
   const existing = await getUserByEmail(c.env, normalized);
 
-  // If user doesn't exist and no household_id provided, this is a stale invite
-  // or first-ever login. For first-ever login the user must be invited first;
-  // bootstrapping the very first household happens via /api/auth/bootstrap below.
   if (!existing) {
-    return c.json({ error: "no_account", hint: "Poproś o zaproszenie albo użyj /api/auth/bootstrap" }, 404);
+    return c.json({ error: "no_account" }, 404);
   }
+
+  // Existing users: prefer their persisted lang; fall back to request hint.
+  const emailLang = existing.lang ?? pickLang(lang);
 
   const token = newId().replace(/-/g, "") + newId().replace(/-/g, "");
   const expires = Date.now() + MAGIC_LINK_TTL_MS;
@@ -48,7 +53,7 @@ app.post("/api/auth/request", async (c) => {
     .run();
 
   const url = `${c.env.APP_URL}/api/auth/verify?token=${token}`;
-  const tpl = magicLinkEmail(url, false);
+  const tpl = magicLinkEmail(url, false, emailLang);
   await sendEmail(c.env, { to: normalized, subject: tpl.subject, html: tpl.html, text: tpl.text });
 
   return c.json({ ok: true });
@@ -57,12 +62,17 @@ app.post("/api/auth/request", async (c) => {
 // --- Auth: bootstrap first household + first user (one-time, no auth required) ---
 // Used only when there are zero households in the DB. After that, users are added by invite.
 app.post("/api/auth/bootstrap", async (c) => {
-  const { email, name } = await c.req.json<{ email: string; name?: string }>();
+  const { email, name, lang } = await c.req.json<{
+    email: string;
+    name?: string;
+    lang?: Lang;
+  }>();
   if (!email || !email.includes("@")) return c.json({ error: "bad_email" }, 400);
 
   const count = await c.env.DB.prepare("SELECT COUNT(*) as n FROM households").first<{ n: number }>();
   if ((count?.n ?? 0) > 0) return c.json({ error: "bootstrap_closed" }, 403);
 
+  const userLang = pickLang(lang);
   const householdId = newId();
   const userId = newId();
   const now = Date.now();
@@ -73,9 +83,9 @@ app.post("/api/auth/bootstrap", async (c) => {
        VALUES (?, 'Dom', 'Europe/Warsaw', '08:00', '10:00', ?)`,
     ).bind(householdId, now),
     c.env.DB.prepare(
-      `INSERT INTO users (id, household_id, email, name, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).bind(userId, householdId, email.toLowerCase(), name ?? null, now),
+      `INSERT INTO users (id, household_id, email, name, lang, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(userId, householdId, email.toLowerCase(), name ?? null, userLang, now),
   ]);
 
   // Send magic link to log them in
@@ -88,7 +98,7 @@ app.post("/api/auth/bootstrap", async (c) => {
     .run();
 
   const url = `${c.env.APP_URL}/api/auth/verify?token=${token}`;
-  const tpl = magicLinkEmail(url, false);
+  const tpl = magicLinkEmail(url, false, userLang);
   await sendEmail(c.env, { to: email, subject: tpl.subject, html: tpl.html, text: tpl.text });
 
   return c.json({ ok: true });
@@ -252,10 +262,23 @@ app.post("/api/household/invite", async (c) => {
     .run();
 
   const url = `${c.env.APP_URL}/api/auth/verify?token=${token}`;
-  const tpl = magicLinkEmail(url, true);
+  // Use inviter's language as default for invitee — they can switch after joining.
+  const tpl = magicLinkEmail(url, true, user.lang);
   await sendEmail(c.env, { to: normalized, subject: tpl.subject, html: tpl.html, text: tpl.text });
 
   return c.json({ ok: true });
+});
+
+// --- User: update preferred language ------------------------------------------
+app.post("/api/me/lang", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  const { lang } = await c.req.json<{ lang?: Lang }>();
+  const next = pickLang(lang, user.lang);
+  await c.env.DB.prepare("UPDATE users SET lang = ? WHERE id = ?")
+    .bind(next, user.id)
+    .run();
+  return c.json({ ok: true, lang: next });
 });
 
 app.patch("/api/household", async (c) => {

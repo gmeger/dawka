@@ -4,6 +4,7 @@ export type Me = {
     household_id: string;
     email: string;
     name: string | null;
+    lang: "pl" | "en";
   };
   household: {
     id: string;
@@ -39,15 +40,15 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => req<Me | { user: null }>("/api/me"),
-  requestLogin: (email: string) =>
+  requestLogin: (email: string, lang?: "pl" | "en") =>
     req<{ ok: boolean }>("/api/auth/request", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, lang }),
     }),
-  bootstrap: (email: string, name?: string) =>
+  bootstrap: (email: string, name?: string, lang?: "pl" | "en") =>
     req<{ ok: boolean }>("/api/auth/bootstrap", {
       method: "POST",
-      body: JSON.stringify({ email, name }),
+      body: JSON.stringify({ email, name, lang }),
     }),
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   takeDose: () =>
