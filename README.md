@@ -24,30 +24,36 @@ Everything fits within the free tier.
 
 ## One-time setup
 
-You need: a Cloudflare account, the domain `dawka.org` (or your own — adjust `wrangler.toml`), and a Resend account.
+You need: a Cloudflare account, a domain registered in Cloudflare DNS, and a Resend account.
+
+If you're using your own domain, replace `dawka.org` everywhere in `wrangler.toml` (`routes`, `APP_URL`, `EMAIL_FROM`, `VAPID_SUBJECT`) before you start.
 
 ```bash
 # 1. Cloudflare auth + database
 npx wrangler login
 npx wrangler d1 create dawka
-# → paste the returned database_id into wrangler.toml
+# → paste the returned database_id into wrangler.toml under [[d1_databases]]
 
 # 2. VAPID keys (Web Push)
 npm run vapid:generate
 # → outputs { "publicKey": "...", "privateKey": "..." }
-npx wrangler secret put VAPID_PUBLIC_KEY
-npx wrangler secret put VAPID_PRIVATE_KEY
+# Use printf (not echo) so no trailing newline ends up in the secret:
+printf "%s" "<publicKey>"  | npx wrangler secret put VAPID_PUBLIC_KEY
+printf "%s" "<privateKey>" | npx wrangler secret put VAPID_PRIVATE_KEY
 
 # 3. Resend
 # - sign up at resend.com
 # - verify your domain (add SPF, DKIM, return-path DNS records to Cloudflare DNS)
 # - create an API key
-npx wrangler secret put RESEND_API_KEY
-npx wrangler secret put SESSION_SECRET   # any 32+ random bytes
+printf "%s" "<resend_api_key>" | npx wrangler secret put RESEND_API_KEY
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
+  | npx wrangler secret put SESSION_SECRET
 
 # 4. Apply migrations + first deploy
 npm run db:migrate:remote
 npm run deploy
+# → wrangler attaches the routes from wrangler.toml as Custom Domains
+#   (your domain must be active in Cloudflare DNS for this to succeed)
 ```
 
 After deploying, bootstrap the first user and household:
@@ -58,7 +64,7 @@ curl -X POST https://dawka.org/api/auth/bootstrap \
   -d '{"email":"you@example.com","name":"You","lang":"en"}'
 ```
 
-The bootstrap endpoint refuses to run once any household exists, so it's safe to leave enabled.
+The bootstrap endpoint refuses to run once any household exists, so it's safe to leave enabled. After bootstrap, all subsequent users join via household invites from the Settings tab.
 
 ## Local development
 
@@ -100,9 +106,23 @@ tests/          Vitest unit tests (tz/window logic)
 | `npm run db:migrate:remote` | Apply migrations to production D1 |
 | `npm run vapid:generate` | Print a fresh VAPID keypair as JSON |
 
+## Testing reminders without waiting for the next cron tick
+
+The cron runs every 15 minutes (`*/15 * * * *` UTC). To trigger the full reminder logic on demand — useful for verifying that push delivery works end-to-end — call the dev endpoint while authenticated:
+
+```js
+// In your PWA, while logged in, paste in the JS console:
+fetch('/api/dev/run-cron', { method: 'POST', credentials: 'include' })
+  .then(r => r.json()).then(console.log)
+```
+
+It runs `scheduled()` synchronously and returns `{ ok: true }`. The endpoint is auth-gated and only ever pushes/emails members of the caller's own household, so the blast radius is bounded.
+
 ## iOS Web Push, briefly
 
 iOS supports Web Push only after a PWA has been installed to the home screen (Share → Add to Home Screen). The app shows a banner if push hasn't been enabled. The email fallback exists for exactly this reason — if a push doesn't arrive (Focus mode, device off, anything), an email lands an hour after the first push attempt.
+
+When clicking the magic link in an email, the link must reach your PWA's browser context (Safari on iOS) — not an in-app browser inside Gmail/Outlook/etc. If sign-in seems silently to fail, copy the URL from the email and paste it into Safari's address bar instead.
 
 ## License
 
