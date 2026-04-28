@@ -545,9 +545,9 @@ function MedicationForm({ med, onSaved }: { med: Medication; onSaved: () => void
         <input className="input" value={dose} onChange={(e) => setDose(e.target.value)} style={{ maxWidth: 220 }} />
       </div>
 
-      <div className="row">
+      <div className="stack">
         <span className="label">{t("settings.med.schedule_type")}</span>
-        <div className="tabs" style={{ maxWidth: 240 }}>
+        <div className="tabs">
           <button aria-selected={scheduleType === "slots"} onClick={() => switchType("slots")}>
             {t("settings.med.slots")}
           </button>

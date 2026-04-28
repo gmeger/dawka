@@ -152,6 +152,31 @@ button {
   color: var(--fg);
 }
 
+.tabs button {
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+
+/* Vertical block: label on top, control below at full width.
+   Use when the control is too wide for the same row as its label. */
+.stack {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stack:last-child {
+  border-bottom: none;
+}
+
+.stack .label {
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .history-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
