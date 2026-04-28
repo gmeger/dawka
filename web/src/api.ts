@@ -1,3 +1,33 @@
+export type ScheduleType = "slots" | "hours";
+
+export type Medication = {
+  id: string;
+  household_id: string;
+  name: string;
+  dose: string;
+  schedule_type: ScheduleType;
+  schedule_pattern: string;
+  morning_at: string;
+  noon_at: string;
+  evening_at: string;
+  hours_anchor: number | null;
+  hours_until: number | null;
+  active: number;
+};
+
+export type Dose = {
+  id: string;
+  medication_id: string;
+  household_id: string;
+  scheduled_at: number;
+  scheduled_label: string;
+  taken_at: number | null;
+  taken_by_user_id: string | null;
+  first_alert_at: number | null;
+  last_alert_at: number | null;
+  email_sent_at: number | null;
+};
+
 export type Me = {
   user: {
     id: string;
@@ -10,16 +40,11 @@ export type Me = {
     id: string;
     name: string;
     tz: string;
-    remind_from: string;
-    remind_until: string;
   };
+  medication: Medication;
   today: {
-    date: string;
-    dose: {
-      id: string;
-      taken_at: number | null;
-      taken_by_user_id: string | null;
-    };
+    date: string; // YYYY-MM-DD in household tz
+    doses: Dose[];
   };
   members: { id: string; email: string; name: string | null }[];
   vapidPublicKey: string;
@@ -51,26 +76,23 @@ export const api = {
       body: JSON.stringify({ email, name, lang }),
     }),
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
-  takeDose: () =>
-    req<{ ok: boolean }>("/api/dose/today/take", { method: "POST" }),
-  untakeDose: () =>
-    req<{ ok: boolean }>("/api/dose/today/untake", { method: "POST" }),
-  history: (days = 30) =>
-    req<{ doses: Array<{ date: string; taken_at: number | null }> }>(
-      `/api/dose/history?days=${days}`,
+  takeDose: (id: string) =>
+    req<{ ok: boolean }>(`/api/dose/${id}/take`, { method: "POST" }),
+  untakeDose: (id: string) =>
+    req<{ ok: boolean }>(`/api/dose/${id}/untake`, { method: "POST" }),
+  history: (days = 35) =>
+    req<{ doses: Dose[] }>(`/api/dose/history?days=${days}`),
+  day: (date: string) =>
+    req<{ date: string; doses: Dose[] }>(
+      `/api/dose/day?date=${encodeURIComponent(date)}`,
     ),
   invite: (email: string) =>
     req<{ ok: boolean }>("/api/household/invite", {
       method: "POST",
       body: JSON.stringify({ email }),
     }),
-  updateHousehold: (patch: {
-    remind_from?: string;
-    remind_until?: string;
-    tz?: string;
-    name?: string;
-  }) =>
-    req<{ ok: boolean }>("/api/household", {
+  updateMedication: (patch: Partial<Medication>) =>
+    req<{ ok: boolean }>("/api/medication", {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),

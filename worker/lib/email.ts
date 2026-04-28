@@ -40,10 +40,10 @@ const COPY = {
     magicCta: "Otwórz Dawka",
     magicAlt: "Albo skopiuj ten link:",
     magicExpires: "Link wygasa za 30 minut.",
-    reminderSubject: "Przypomnienie: lek nie został odhaczony",
+    reminderSubject: "Przypomnienie: dawka nie została odhaczona",
     reminderHeading: "Dawka — przypomnienie",
     reminderBody:
-      "Mija godzina od pierwszego powiadomienia, a dzisiejsza dawka wciąż nie została odhaczona w aplikacji.",
+      "Minęła godzina od pierwszego powiadomienia o dawce {medName} ({slot}), a wciąż nie została odhaczona w aplikacji.",
     reminderCta: "Otwórz Dawka",
   },
   en: {
@@ -58,7 +58,7 @@ const COPY = {
     reminderSubject: "Reminder: dose not yet marked as given",
     reminderHeading: "Dawka — reminder",
     reminderBody:
-      "It’s been an hour since the first notification and today’s dose has not been marked as given in the app.",
+      "It’s been an hour since the first notification about {medName} ({slot}) and the dose still hasn’t been marked as given in the app.",
     reminderCta: "Open Dawka",
   },
 } as const satisfies Record<Lang, Record<string, string>>;
@@ -86,17 +86,20 @@ export function magicLinkEmail(
   return { subject, html, text };
 }
 
-export function reminderEmail(lang: Lang): {
-  subject: string;
-  html: string;
-  text: string;
-} {
+export function reminderEmail(
+  lang: Lang,
+  medName: string,
+  slot: string,
+): { subject: string; html: string; text: string } {
   const c = COPY[lang];
+  const body = c.reminderBody
+    .replace("{medName}", medName)
+    .replace("{slot}", slot);
   const html = `<!doctype html><html><body style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
 <h2 style="margin:0 0 16px">${c.reminderHeading}</h2>
-<p>${c.reminderBody}</p>
+<p>${body}</p>
 <p><a href="https://dawka.org" style="display:inline-block;background:#0a7;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none">${c.reminderCta}</a></p>
 </body></html>`;
-  const text = `${c.reminderBody} https://dawka.org`;
+  const text = `${body} https://dawka.org`;
   return { subject: c.reminderSubject, html, text };
 }

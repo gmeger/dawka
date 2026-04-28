@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDays,
+  formatLocalHHMM,
   hhmmToMinutes,
   isWithinWindow,
+  localDateTimeToUnixMs,
   localNow,
 } from "../worker/lib/time";
 
@@ -60,5 +63,48 @@ describe("localNow", () => {
     const r = localNow(utc, "Europe/Warsaw");
     expect(r.time).toBe("00:00");
     expect(r.minutes).toBe(0);
+  });
+});
+
+describe("localDateTimeToUnixMs", () => {
+  it("inverts localNow in winter (CET, +1)", () => {
+    // 08:00 Warsaw on 2026-01-15 = 07:00 UTC
+    const ms = localDateTimeToUnixMs("2026-01-15", "08:00", "Europe/Warsaw");
+    expect(ms).toBe(Date.UTC(2026, 0, 15, 7, 0));
+  });
+
+  it("inverts localNow in summer (CEST, +2)", () => {
+    // 08:00 Warsaw on 2026-07-15 = 06:00 UTC
+    const ms = localDateTimeToUnixMs("2026-07-15", "08:00", "Europe/Warsaw");
+    expect(ms).toBe(Date.UTC(2026, 6, 15, 6, 0));
+  });
+
+  it("round-trips via localNow", () => {
+    const ms = localDateTimeToUnixMs("2026-04-28", "14:30", "Europe/Warsaw");
+    const back = localNow(new Date(ms), "Europe/Warsaw");
+    expect(back.date).toBe("2026-04-28");
+    expect(back.time).toBe("14:30");
+  });
+
+  it("handles UTC tz directly", () => {
+    const ms = localDateTimeToUnixMs("2026-04-28", "08:00", "UTC");
+    expect(ms).toBe(Date.UTC(2026, 3, 28, 8, 0));
+  });
+});
+
+describe("addDays", () => {
+  it("adds positive and negative days, including month/year crossings", () => {
+    expect(addDays("2026-04-28", 1)).toBe("2026-04-29");
+    expect(addDays("2026-04-28", -1)).toBe("2026-04-27");
+    expect(addDays("2026-04-30", 1)).toBe("2026-05-01");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+    expect(addDays("2026-01-01", -1)).toBe("2025-12-31");
+  });
+});
+
+describe("formatLocalHHMM", () => {
+  it("formats UTC ms as HH:MM in target tz", () => {
+    const ms = Date.UTC(2026, 3, 28, 6, 0); // 08:00 CEST
+    expect(formatLocalHHMM(ms, "Europe/Warsaw")).toBe("08:00");
   });
 });

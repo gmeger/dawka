@@ -1,14 +1,20 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import {
+  createDefaultMedication,
+  deletePendingFutureDoses,
   deletePushSubscriptionByEndpoint,
+  getActiveMedication,
+  getDose,
   getHousehold,
   getUserByEmail,
   type Lang,
+  listDosesForRange,
   listHouseholdUsers,
   markDoseTaken,
   newId,
-  upsertTodayDose,
+  type ScheduleType,
+  untakeDoseByMarker,
 } from "./lib/db";
 import { magicLinkEmail, sendEmail } from "./lib/email";
 import {
@@ -17,7 +23,7 @@ import {
   getSessionUser,
   setSessionCookie,
 } from "./lib/session";
-import { localNow } from "./lib/time";
+import { addDays, localDateTimeToUnixMs, localNow } from "./lib/time";
 import { runCron } from "./cron";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -37,9 +43,9 @@ app.post("/api/auth/request", async (c) => {
   const existing = await getUserByEmail(c.env, normalized);
 
   if (!existing) {
-  // Do not disclose whether the account exists. Return generic success response.
-  return c.json({ ok: true });
-}
+    // Do not disclose whether the account exists. Return generic success response.
+    return c.json({ ok: true });
+  }
 
   // Existing users: prefer their persisted lang; fall back to request hint.
   const emailLang = existing.lang ?? pickLang(lang);
@@ -61,7 +67,6 @@ app.post("/api/auth/request", async (c) => {
 });
 
 // --- Auth: bootstrap first household + first user (one-time, no auth required) ---
-// Used only when there are zero households in the DB. After that, users are added by invite.
 app.post("/api/auth/bootstrap", async (c) => {
   const { email, name, lang } = await c.req.json<{
     email: string;
@@ -80,14 +85,16 @@ app.post("/api/auth/bootstrap", async (c) => {
 
   await c.env.DB.batch([
     c.env.DB.prepare(
-      `INSERT INTO households (id, name, tz, remind_from, remind_until, created_at)
-       VALUES (?, 'Dom', 'Europe/Warsaw', '08:00', '10:00', ?)`,
+      `INSERT INTO households (id, name, tz, created_at) VALUES (?, 'Dom', 'Europe/Warsaw', ?)`,
     ).bind(householdId, now),
     c.env.DB.prepare(
       `INSERT INTO users (id, household_id, email, name, lang, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).bind(userId, householdId, email.toLowerCase(), name ?? null, userLang, now),
   ]);
+
+  // Default medication so the cron has something to schedule from day one.
+  await createDefaultMedication(c.env, householdId);
 
   // Send magic link to log them in
   const token = newId().replace(/-/g, "") + newId().replace(/-/g, "");
@@ -156,7 +163,7 @@ app.post("/api/auth/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-// --- Me: current user + household + today's dose ------------------------------
+// --- Me: current user + household + medication + today's doses ----------------
 app.get("/api/me", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ user: null }, 401);
@@ -164,83 +171,101 @@ app.get("/api/me", async (c) => {
   const household = await getHousehold(c.env, user.household_id);
   if (!household) return c.json({ error: "no_household" }, 500);
 
+  // Auto-bootstrap medication for households missing one (e.g. immediately after the
+  // 0002 migration on a freshly-created household). Idempotent: getActive returns null
+  // only when nothing exists; createDefault inserts and we re-fetch.
+  let medication = await getActiveMedication(c.env, household.id);
+  if (!medication) {
+    medication = await createDefaultMedication(c.env, household.id);
+  }
+
   const local = localNow(new Date(), household.tz);
-  const dose = await upsertTodayDose(c.env, household.id, local.date);
+  const todayStartMs = localDateTimeToUnixMs(local.date, "00:00", household.tz);
+  const tomorrowStartMs = localDateTimeToUnixMs(addDays(local.date, 1), "00:00", household.tz);
+  const todayDoses = await listDosesForRange(
+    c.env,
+    household.id,
+    todayStartMs,
+    tomorrowStartMs,
+  );
+
   const members = await listHouseholdUsers(c.env, household.id);
 
   return c.json({
     user,
     household,
-    today: { date: local.date, dose },
+    medication,
+    today: { date: local.date, doses: todayDoses },
     members: members.map((m) => ({ id: m.id, email: m.email, name: m.name })),
     vapidPublicKey: c.env.VAPID_PUBLIC_KEY,
   });
 });
 
-// --- Dose: mark today taken ---------------------------------------------------
-app.post("/api/dose/today/take", async (c) => {
+// --- Dose: take/untake a specific dose ----------------------------------------
+async function ensureDoseInUserHousehold(
+  c: import("hono").Context<{ Bindings: Env }>,
+  doseId: string,
+) {
   const user = await getSessionUser(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (!user) return { error: "unauthorized" as const, status: 401 as const };
 
-  const household = await getHousehold(c.env, user.household_id);
-  if (!household) return c.json({ error: "no_household" }, 500);
-
-  const local = localNow(new Date(), household.tz);
-  const dose = await upsertTodayDose(c.env, household.id, local.date);
-  await markDoseTaken(c.env, dose.id, user.id, Date.now());
-
-  return c.json({ ok: true });
-});
-
-// --- Dose: undo "taken" for today (only by the user who marked it) ------------
-app.post("/api/dose/today/untake", async (c) => {
-  const user = await getSessionUser(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
-
-  const household = await getHousehold(c.env, user.household_id);
-  if (!household) return c.json({ error: "no_household" }, 500);
-
-  const local = localNow(new Date(), household.tz);
-  const dose = await c.env.DB.prepare(
-    "SELECT id, taken_at, taken_by_user_id FROM doses WHERE household_id = ? AND date = ?",
-  )
-    .bind(household.id, local.date)
-    .first<{ id: string; taken_at: number | null; taken_by_user_id: string | null }>();
-
-  if (!dose || dose.taken_at === null) return c.json({ error: "not_taken" }, 404);
-  if (dose.taken_by_user_id !== user.id) {
-    return c.json({ error: "not_yours_to_undo" }, 403);
+  const dose = await getDose(c.env, doseId);
+  if (!dose) return { error: "not_found" as const, status: 404 as const };
+  if (dose.household_id !== user.household_id) {
+    return { error: "forbidden" as const, status: 403 as const };
   }
+  return { user, dose };
+}
 
-  // Reset push/email tracking too — cron will re-evaluate from scratch on next tick.
-  await c.env.DB.prepare(
-    `UPDATE doses
-     SET taken_at = NULL, taken_by_user_id = NULL,
-         first_push_at = NULL, last_push_at = NULL, email_sent_at = NULL
-     WHERE id = ?`,
-  )
-    .bind(dose.id)
-    .run();
-
+app.post("/api/dose/:id/take", async (c) => {
+  const r = await ensureDoseInUserHousehold(c, c.req.param("id"));
+  if ("error" in r) return c.json({ error: r.error }, r.status);
+  await markDoseTaken(c.env, r.dose.id, r.user.id, Date.now());
   return c.json({ ok: true });
 });
 
-// --- History ------------------------------------------------------------------
+app.post("/api/dose/:id/untake", async (c) => {
+  const r = await ensureDoseInUserHousehold(c, c.req.param("id"));
+  if ("error" in r) return c.json({ error: r.error }, r.status);
+
+  const ok = await untakeDoseByMarker(c.env, r.dose.id, r.user.id);
+  if (!ok) return c.json({ error: "not_yours_to_undo" }, 403);
+  return c.json({ ok: true });
+});
+
+// --- History: doses across a date range ---------------------------------------
 app.get("/api/dose/history", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "unauthorized" }, 401);
 
-  const days = Math.min(Number(c.req.query("days") ?? 30), 365);
-  const r = await c.env.DB.prepare(
-    `SELECT * FROM doses
-     WHERE household_id = ?
-     ORDER BY date DESC
-     LIMIT ?`,
-  )
-    .bind(user.household_id, days)
-    .all();
+  const household = await getHousehold(c.env, user.household_id);
+  if (!household) return c.json({ error: "no_household" }, 500);
 
-  return c.json({ doses: r.results });
+  const days = Math.min(Number(c.req.query("days") ?? 35), 365);
+  const local = localNow(new Date(), household.tz);
+  const fromMs = localDateTimeToUnixMs(addDays(local.date, -(days - 1)), "00:00", household.tz);
+  const toMs = localDateTimeToUnixMs(addDays(local.date, 1), "00:00", household.tz);
+  const doses = await listDosesForRange(c.env, household.id, fromMs, toMs);
+  return c.json({ doses });
+});
+
+// --- Day detail: all doses for a specific YYYY-MM-DD --------------------------
+app.get("/api/dose/day", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  const household = await getHousehold(c.env, user.household_id);
+  if (!household) return c.json({ error: "no_household" }, 500);
+
+  const date = c.req.query("date");
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: "bad_date" }, 400);
+  }
+
+  const fromMs = localDateTimeToUnixMs(date, "00:00", household.tz);
+  const toMs = localDateTimeToUnixMs(addDays(date, 1), "00:00", household.tz);
+  const doses = await listDosesForRange(c.env, household.id, fromMs, toMs);
+  return c.json({ date, doses });
 });
 
 // --- Push subscription --------------------------------------------------------
@@ -254,7 +279,6 @@ app.post("/api/push/subscribe", async (c) => {
   }>();
 
   const now = Date.now();
-  // Upsert by endpoint
   await c.env.DB.prepare(
     `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at, last_seen_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -296,14 +320,12 @@ app.post("/api/household/invite", async (c) => {
     .run();
 
   const url = `${c.env.APP_URL}/api/auth/verify?token=${token}`;
-  // Use inviter's language as default for invitee — they can switch after joining.
   const tpl = magicLinkEmail(url, true, user.lang);
   await sendEmail(c.env, { to: normalized, subject: tpl.subject, html: tpl.html, text: tpl.text });
 
   return c.json({ ok: true });
 });
 
-// --- User: update preferred language ------------------------------------------
 app.post("/api/me/lang", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "unauthorized" }, 401);
@@ -319,16 +341,10 @@ app.patch("/api/household", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "unauthorized" }, 401);
 
-  const body = await c.req.json<{
-    tz?: string;
-    remind_from?: string;
-    remind_until?: string;
-    name?: string;
-  }>();
-
+  const body = await c.req.json<{ tz?: string; name?: string }>();
   const fields: string[] = [];
   const values: (string | number)[] = [];
-  for (const k of ["tz", "remind_from", "remind_until", "name"] as const) {
+  for (const k of ["tz", "name"] as const) {
     if (body[k] !== undefined) {
       fields.push(`${k} = ?`);
       values.push(body[k]!);
@@ -346,7 +362,101 @@ app.patch("/api/household", async (c) => {
   return c.json({ ok: true });
 });
 
-// --- Dev: trigger cron on demand (auth-gated; useful for testing push) -------
+// --- Medication: edit ---------------------------------------------------------
+function validateMedicationPatch(body: Record<string, unknown>): string | null {
+  if (body.schedule_type !== undefined && body.schedule_type !== "slots" && body.schedule_type !== "hours") {
+    return "bad_schedule_type";
+  }
+  if (body.schedule_pattern !== undefined) {
+    const p = String(body.schedule_pattern);
+    const t = body.schedule_type;
+    if (t === "slots" || (t === undefined && /^[01]-[01]-[01]$/.test(p))) {
+      if (!/^[01]-[01]-[01]$/.test(p)) return "bad_pattern_slots";
+    } else if (t === "hours") {
+      const n = Number(p);
+      if (!Number.isFinite(n) || n <= 0 || n > 24) return "bad_pattern_hours";
+    }
+  }
+  for (const k of ["morning_at", "noon_at", "evening_at"] as const) {
+    if (body[k] !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(body[k]))) {
+      return `bad_${k}`;
+    }
+  }
+  return null;
+}
+
+app.patch("/api/medication", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  const med = await getActiveMedication(c.env, user.household_id);
+  if (!med) return c.json({ error: "no_medication" }, 404);
+
+  const body = await c.req.json<{
+    name?: string;
+    dose?: string;
+    schedule_type?: ScheduleType;
+    schedule_pattern?: string;
+    morning_at?: string;
+    noon_at?: string;
+    evening_at?: string;
+    hours_anchor?: number | null;
+    hours_until?: number | null;
+    active?: 0 | 1;
+  }>();
+
+  const validationError = validateMedicationPatch(body as Record<string, unknown>);
+  if (validationError) return c.json({ error: validationError }, 400);
+
+  const fields: string[] = [];
+  const values: (string | number | null)[] = [];
+  const allowed = [
+    "name",
+    "dose",
+    "schedule_type",
+    "schedule_pattern",
+    "morning_at",
+    "noon_at",
+    "evening_at",
+    "hours_anchor",
+    "hours_until",
+    "active",
+  ] as const;
+  for (const k of allowed) {
+    if (body[k] !== undefined) {
+      fields.push(`${k} = ?`);
+      values.push(body[k] as string | number | null);
+    }
+  }
+  if (fields.length === 0) return c.json({ ok: true });
+
+  fields.push("updated_at = ?");
+  values.push(Date.now());
+  values.push(med.id);
+
+  await c.env.DB.prepare(`UPDATE medications SET ${fields.join(", ")} WHERE id = ?`)
+    .bind(...values)
+    .run();
+
+  // Schedule changed → drop pending future doses; cron will re-materialize on the
+  // next tick per the new pattern.
+  const scheduleChanged = [
+    "schedule_type",
+    "schedule_pattern",
+    "morning_at",
+    "noon_at",
+    "evening_at",
+    "hours_anchor",
+    "hours_until",
+  ].some((k) => body[k as keyof typeof body] !== undefined);
+  if (scheduleChanged) {
+    await deletePendingFutureDoses(c.env, med.id, Date.now());
+  }
+
+  return c.json({ ok: true });
+});
+
+// --- Dev: trigger cron on demand (auth-gated) ---------------------------------
 app.post("/api/dev/run-cron", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "unauthorized" }, 401);
@@ -355,9 +465,6 @@ app.post("/api/dev/run-cron", async (c) => {
 });
 
 // --- Static assets fallthrough ------------------------------------------------
-// Anything not /api/* falls through to Workers Static Assets binding (Vite build).
-// `not_found_handling = "single-page-application"` in wrangler.toml routes unknown
-// paths to index.html so client-side routing works.
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {

@@ -162,22 +162,124 @@ button {
   aspect-ratio: 1;
   border-radius: 8px;
   background: var(--border);
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   color: var(--muted);
+  cursor: pointer;
+  font: inherit;
 }
 
-.history-cell.taken {
+.history-cell:active {
+  transform: scale(0.96);
+}
+
+.history-cell-all_taken {
   background: var(--accent);
   color: white;
 }
 
-.history-cell.missed {
+.history-cell-missed {
   background: var(--danger);
   color: white;
   opacity: 0.7;
+}
+
+.history-cell-partial {
+  background: #d4961a;
+  color: white;
+}
+
+.history-cell-in_progress {
+  background: var(--card);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.history-cell-empty {
+  background: var(--border);
+  color: var(--muted);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: var(--card);
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+  border-radius: 16px 16px 0 0;
+  padding: 20px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.day-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.day-list > li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-list > li:last-child {
+  border-bottom: none;
+}
+
+.day-dose-head {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.day-dose-line {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.day-dose.status-taken .day-dose-head {
+  color: var(--accent);
+}
+
+.day-dose.status-missed .day-dose-head {
+  color: var(--danger);
 }
 
 .input {
