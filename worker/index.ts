@@ -192,6 +192,39 @@ app.post("/api/dose/today/take", async (c) => {
   return c.json({ ok: true });
 });
 
+// --- Dose: undo "taken" for today (only by the user who marked it) ------------
+app.post("/api/dose/today/untake", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  const household = await getHousehold(c.env, user.household_id);
+  if (!household) return c.json({ error: "no_household" }, 500);
+
+  const local = localNow(new Date(), household.tz);
+  const dose = await c.env.DB.prepare(
+    "SELECT id, taken_at, taken_by_user_id FROM doses WHERE household_id = ? AND date = ?",
+  )
+    .bind(household.id, local.date)
+    .first<{ id: string; taken_at: number | null; taken_by_user_id: string | null }>();
+
+  if (!dose || dose.taken_at === null) return c.json({ error: "not_taken" }, 404);
+  if (dose.taken_by_user_id !== user.id) {
+    return c.json({ error: "not_yours_to_undo" }, 403);
+  }
+
+  // Reset push/email tracking too — cron will re-evaluate from scratch on next tick.
+  await c.env.DB.prepare(
+    `UPDATE doses
+     SET taken_at = NULL, taken_by_user_id = NULL,
+         first_push_at = NULL, last_push_at = NULL, email_sent_at = NULL
+     WHERE id = ?`,
+  )
+    .bind(dose.id)
+    .run();
+
+  return c.json({ ok: true });
+});
+
 // --- History ------------------------------------------------------------------
 app.get("/api/dose/history", async (c) => {
   const user = await getSessionUser(c);

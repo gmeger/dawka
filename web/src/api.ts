@@ -53,6 +53,8 @@ export const api = {
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   takeDose: () =>
     req<{ ok: boolean }>("/api/dose/today/take", { method: "POST" }),
+  untakeDose: () =>
+    req<{ ok: boolean }>("/api/dose/today/untake", { method: "POST" }),
   history: (days = 30) =>
     req<{ doses: Array<{ date: string; taken_at: number | null }> }>(
       `/api/dose/history?days=${days}`,

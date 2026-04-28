@@ -39,6 +39,9 @@ const translations = {
     "today.taken.sub": "O {time} przez {who}",
     "today.pending.sub": "Okno przypomnień: {from}–{until}",
     "today.taken.button": "Podane ✓",
+    "today.untake.button": "Cofnij — jednak nie podano",
+    "today.untake.error":
+      "Cofnięcie może zrobić tylko osoba, która oznaczyła podanie.",
     "today.someone": "kogoś z domu",
     "history.streak.label": "Aktualna seria",
     "history.streak.singular": "dzień",
@@ -93,6 +96,9 @@ const translations = {
     "today.taken.sub": "At {time} by {who}",
     "today.pending.sub": "Reminder window: {from}–{until}",
     "today.taken.button": "Mark as given ✓",
+    "today.untake.button": "Undo — wasn’t actually given",
+    "today.untake.error":
+      "Only the person who marked the dose can undo it.",
     "today.someone": "someone in the household",
     "history.streak.label": "Current streak",
     "history.streak.singular": "day",

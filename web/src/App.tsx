@@ -138,6 +138,7 @@ function Today({ me, onTake }: { me: Me; onTake: () => void }) {
   const { t } = useI18n();
   const [pushState, setPushState] = useState<PushState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getPushState().then(setPushState);
@@ -148,6 +149,7 @@ function Today({ me, onTake }: { me: Me; onTake: () => void }) {
     ? me.members.find((m) => m.id === me.today.dose.taken_by_user_id)
     : null;
   const whoLabel = takenBy?.name ?? takenBy?.email ?? t("today.someone");
+  const canUntake = taken && me.today.dose.taken_by_user_id === me.user.id;
 
   const enablePush = async () => {
     setBusy(true);
@@ -158,9 +160,23 @@ function Today({ me, onTake }: { me: Me; onTake: () => void }) {
 
   const take = async () => {
     setBusy(true);
+    setError(null);
     try {
       await api.takeDose();
       onTake();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const untake = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.untakeDose();
+      onTake();
+    } catch {
+      setError(t("today.untake.error"));
     } finally {
       setBusy(false);
     }
@@ -204,6 +220,19 @@ function Today({ me, onTake }: { me: Me; onTake: () => void }) {
           <button className="btn-primary" onClick={take} disabled={busy}>
             {t("today.taken.button")}
           </button>
+        )}
+        {canUntake && (
+          <button
+            className="btn-ghost"
+            onClick={untake}
+            disabled={busy}
+            style={{ marginTop: 8 }}
+          >
+            {t("today.untake.button")}
+          </button>
+        )}
+        {error && (
+          <p style={{ color: "var(--danger)", fontSize: 14, marginTop: 12 }}>{error}</p>
         )}
       </div>
     </>
