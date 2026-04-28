@@ -284,7 +284,7 @@ function DoseCard({
 type DayBucket = {
   date: string;
   doses: Dose[];
-  status: "all_taken" | "partial" | "missed" | "in_progress" | "empty";
+  status: "all_taken" | "partial" | "missed" | "in_progress" | "empty" | "future";
 };
 
 function bucketByDay(doses: Dose[], tz: string): Map<string, Dose[]> {
@@ -321,7 +321,7 @@ function History({ me }: { me: Me }) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    api.history(35).then((r) => setDoses(r.doses));
+    api.history(42).then((r) => setDoses(r.doses));
   }, []);
 
   if (!doses) return <div className="card">{t("loading")}</div>;
@@ -329,19 +329,32 @@ function History({ me }: { me: Me }) {
   const now = Date.now();
   const byDay = bucketByDay(doses, me.household.tz);
 
-  // Build 5x7 grid ending today.
+  // Build a 5-week Monday-to-Sunday grid ending with the week that contains today.
   const today = me.today.date;
+  const todayDow = dayOfWeekMondayFirst(today); // 0 = Monday, 6 = Sunday
+  const firstMonday = addDaysIso(today, -todayDow - 28);
+
   const cells: DayBucket[] = [];
-  for (let i = 34; i >= 0; i--) {
-    const date = addDaysIso(today, -i);
+  for (let i = 0; i < 35; i++) {
+    const date = addDaysIso(firstMonday, i);
     const dayDoses = byDay.get(date) ?? [];
-    cells.push({ date, doses: dayDoses, status: bucketStatus(dayDoses, now) });
+    const isFuture = date > today;
+    cells.push({
+      date,
+      doses: dayDoses,
+      status: isFuture ? "future" : bucketStatus(dayDoses, now),
+    });
   }
 
-  const streak = computeStreak(cells);
+  const streak = computeStreak(cells, today);
   const streakUnit = streak === 1 ? t("history.streak.singular") : t("history.streak.plural");
 
-  const takenDays = cells.filter((c) => c.status === "all_taken").length;
+  // Restrict the "last 35 days" stat to the past 35 days actually elapsed,
+  // so a partly-empty current week doesn't drag the ratio down.
+  const past = cells.filter((c) => c.date <= today).slice(-35);
+  const takenDays = past.filter((c) => c.status === "all_taken").length;
+
+  const weekdays = t("weekday.short").split(",");
 
   return (
     <>
@@ -352,17 +365,21 @@ function History({ me }: { me: Me }) {
         </div>
         <div className="row">
           <span className="label">{t("history.last35.label")}</span>
-          <strong>{t("history.last35.value", { taken: takenDays, total: cells.length })}</strong>
+          <strong>{t("history.last35.value", { taken: takenDays, total: past.length })}</strong>
         </div>
       </div>
       <div className="card">
-        <div className="history-grid">
+        <div className="history-grid history-grid-with-header">
+          {weekdays.map((w) => (
+            <div key={w} className="history-weekday">{w}</div>
+          ))}
           {cells.map((c) => (
             <button
               key={c.date}
-              className={`history-cell history-cell-${c.status}`}
+              className={`history-cell history-cell-${c.status}${c.date === today ? " history-cell-today" : ""}`}
               title={c.date}
               onClick={() => setSelectedDate(c.date)}
+              disabled={c.status === "future"}
             >
               {Number(c.date.slice(8))}
             </button>
@@ -724,12 +741,23 @@ function addDaysIso(date: string, n: number): string {
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 }
 
-function computeStreak(cells: DayBucket[]): number {
-  // cells are oldest → newest, today is last
+function computeStreak(cells: DayBucket[], today: string): number {
+  // Walk back from today's cell (which may not be the last cell now that the grid
+  // includes future days in the current week).
+  const todayIdx = cells.findIndex((c) => c.date === today);
+  if (todayIdx < 0) return 0;
   let streak = 0;
-  for (let i = cells.length - 1; i >= 0; i--) {
+  for (let i = todayIdx; i >= 0; i--) {
     if (cells[i]!.status === "all_taken") streak++;
     else break;
   }
   return streak;
+}
+
+function dayOfWeekMondayFirst(dateIso: string): number {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  // Local-time interpretation; consistent regardless of UTC offset since we stay
+  // away from midnight (Date constructor treats the args as local wall time).
+  const dt = new Date(y!, (m ?? 1) - 1, d ?? 1);
+  return (dt.getDay() + 6) % 7;
 }
