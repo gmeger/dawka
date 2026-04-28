@@ -312,6 +312,14 @@ app.patch("/api/household", async (c) => {
   return c.json({ ok: true });
 });
 
+// --- Dev: trigger cron on demand (auth-gated; useful for testing push) -------
+app.post("/api/dev/run-cron", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  await runCron(c.env);
+  return c.json({ ok: true });
+});
+
 // --- Static assets fallthrough ------------------------------------------------
 // Anything not /api/* falls through to Workers Static Assets binding (Vite build).
 // `not_found_handling = "single-page-application"` in wrangler.toml routes unknown
