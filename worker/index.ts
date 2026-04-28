@@ -37,8 +37,9 @@ app.post("/api/auth/request", async (c) => {
   const existing = await getUserByEmail(c.env, normalized);
 
   if (!existing) {
-    return c.json({ error: "no_account" }, 404);
-  }
+  // Do not disclose whether the account exists. Return generic success response.
+  return c.json({ ok: true });
+}
 
   // Existing users: prefer their persisted lang; fall back to request hint.
   const emailLang = existing.lang ?? pickLang(lang);
